@@ -1,0 +1,4 @@
+nose
+sniffer
+pyinotify
+mock
