@@ -8,47 +8,15 @@ from collections import namedtuple
 import ConfigParser
 
 
-parser = OptionParser()
-# parser.add_option("-d", "--delay", dest="delay", metavar="SECONDS",
-#                   help="sleep for this many seconds before doing anything")
-# parser.add_option("-t", "--no-trayer",
-#                   action="store_false", dest="trayer", default=True,
-#                   help="do not initialize trayer")
-# parser.add_option("-w", "--no-wallpaper",
-#                   action="store_false", dest="wallpaper", default=True,
-#                   help="do not initialize wallpaper")
-parser.add_option("-r", "--no-reset",
-                  action="store_false", dest="reset", default=True,
-                  help="do not reset xrandr before starting")
-parser.add_option("-f", "--force",
-                  action="store_true", dest="force", default=False,
-                  help="do not reset xrandr before starting")
-parser.add_option("-v", "--verbose",
-                  action="store_true", dest="verbose", default=False,
-                  help="print out commands that are being executed")
-parser.add_option("-p", "--pretend",
-                  action="store_true", dest="pretend", default=False,
-                  help="print out commands that are being executed but do not actually run them")
+VERBOSE = False
+PRETEND = False
+RESET   = False
+FORCE   = False
 
-(options, args) = parser.parse_args()
 
-def home(path):
-  return
-
-config = ConfigParser.RawConfigParser()
-config.read(os.path.join(os.environ['HOME'], 'etc/autodetect.ini'))
-
-if config.has_option('main', 'delay'):
- time.sleep(config.getint('main', 'delay'))
-
-#################
-# CONFIGURATION #
-#################
-
-VERBOSE = options.verbose
-PRETEND = options.pretend
-RESET   = options.reset
-FORCE   = options.force
+#########
+# UTILS #
+#########
 
 #BG_IMAGE = '/space/themes/wallpapers/Bamboo01-1.png'
 #BG_IMAGE = '/space/themes/wallpapers/darkside-ws.png'
@@ -63,35 +31,38 @@ BG_IMAGE = '/space/themes/wallpapers/old_school-wallpaper-1920x1080.jpg'
 
 TRACKBALL = 'Kensington Expert Mouse Trackball'
 
-LID_STATE = '/proc/acpi/button/lid/LID/state'
-
-#########
-# UTILS #
-#########
-
-CONNECTED_PATTERN = re.compile(r'([A-Z0-9]+) (connected|connected primary) ([0-9]+)')
+CONNECTED_PATTERN = re.compile(r'([A-Z0-9]+) (connected|connected primary)')
+RESOLUTION_PATTERN = re.compile(r'\s+(\d+)x\d+.*\+', re.MULTILINE)
 
 Screen = namedtuple('Screen', 'name width')
+
+def cl(command, ro=False):
+  if VERBOSE:
+    print '$', command
+  if ro:
+    return [line for line in os.popen(command)]
+  elif not PRETEND:
+    os.popen(command)
 
 def get_screens():
   '''Get all screen names'''
   screens = []
-  for line in os.popen('xrandr'):
-    matcher = CONNECTED_PATTERN.match(line)
-    if matcher:
-      screens.append(Screen(name=matcher.group(1), width=int(matcher.group(3))))
+  screen_name = None
+  for line in cl('xrandr', True):
+    resolution_matcher = RESOLUTION_PATTERN.match(line)
+    if screen_name and resolution_matcher:
+      screens.append(Screen(name=screen_name, width=int(resolution_matcher.group(1))))
+      screen_name = None
+    else:
+      connected_matcher = CONNECTED_PATTERN.match(line)
+      if connected_matcher:
+        screen_name = connected_matcher.group(1)
   print 'Active screens: %s' % ', '.join([s.name for s in screens])
   return screens
 
-def cl(command):
-  if VERBOSE:
-    print '$', command
-  if not PRETEND:
-    os.popen(command)
-
 def is_trackball():
   '''Are we using a trackball?'''
-  for line in os.popen('lsusb'):
+  for line in cl('lsusb', True):
     if TRACKBALL in line:
       print 'Found trackball'
       return True
@@ -100,8 +71,8 @@ def is_trackball():
 
 def lid_state():
   lid = None
-  with open(LID_STATE, 'r') as f:
-    lid = 'open' in f.read()
+  state = cl('cat /proc/acpi/button/lid/LID/state', True)
+  lid = 'open' in state
   if lid:
     print 'Lid is OPEN'
   else:
@@ -121,25 +92,27 @@ def xrandr(screens, lid):
     state = 'auto'
   else:
     state = 'off'
-  xrandr = ['xrandr --output "%s" --%s' % (screens[0].name, state)]
-  if len(screens) > 1:
-    xrandr.append('--output "%s" --left-of "%s" --auto' % (screens[1].name, screens[0].name))
+  xrandr = ['xrandr --output %s --%s' % (screens[0].name, state)]
+  if len(screens) == 2:
+    xrandr.append('--output %s --left-of %s --auto' % (screens[1].name, screens[0].name))
+  elif len(screens) > 2:
+    xrandr.append('--output VGA1 --rotation left --auto --output %s --left-of %s --auto --rotation normal' % (screens[2].name, screens[1].name))
   cl(' '.join(xrandr))
   # if lid:
   #   # Move xmobar to the right screen
   #   cl('killall -s SIGUSR1 xmobar')
 
-def wallpaper():
-  print 'Refreshing background image: %s' % BG_IMAGE
+def wallpaper(image):
+  print 'Refreshing background image: %s' % image
   #cl('feh --bg-scale "%s"' % BG_IMAGE)
-  cl('feh --bg-fill "%s"' % BG_IMAGE)
+  cl('feh --bg-fill "%s"' % image)
 
 def systray(screens):
   print 'Refreshing system tray'
   cl('killall trayer')
   if len(screens) > 1:
-    margin = screens[0].width + 1
-    cl('trayer --edge top --align right --SetDockType true --SetPartialStrut true --expand true --width 6 --tint 0x000000 --alpha 0 --transparent true --height 17 --margin %s &' % margin)
+    margin = 0 #screens[1].width
+    cl('trayer --edge top --align right --SetDockType true --SetPartialStrut true --expand true --width 11 --tint 0x000000 --alpha 0 --transparent true --height 17 --margin %s &' % margin)
   else:
     cl('trayer --edge top --align right --SetDockType true --SetPartialStrut true --expand true --width 11 --tint 0x000000 --alpha 0 --transparent true --height 17 &')
 
@@ -172,40 +145,89 @@ def force(screens):
 # MAIN #
 ########
 
-# Reset screens before doing anything
-if RESET:
-  reset()
+def main():
+  parser = OptionParser()
+  # parser.add_option("-d", "--delay", dest="delay", metavar="SECONDS",
+  #                   help="sleep for this many seconds before doing anything")
+  # parser.add_option("-t", "--no-trayer",
+  #                   action="store_false", dest="trayer", default=True,
+  #                   help="do not initialize trayer")
+  # parser.add_option("-w", "--no-wallpaper",
+  #                   action="store_false", dest="wallpaper", default=True,
+  #                   help="do not initialize wallpaper")
+  parser.add_option("-r", "--no-reset",
+                    action="store_false", dest="reset", default=True,
+                    help="do not reset xrandr before starting")
+  parser.add_option("-f", "--force",
+                    action="store_true", dest="force", default=False,
+                    help="do not reset xrandr before starting")
+  parser.add_option("-v", "--verbose",
+                    action="store_true", dest="verbose", default=False,
+                    help="print out commands that are being executed")
+  parser.add_option("-p", "--pretend",
+                    action="store_true", dest="pretend", default=False,
+                    help="print out commands that are being executed but do not actually run them")
 
-# Get current configuration
-screens = get_screens()
+  (options, args) = parser.parse_args()
 
-if FORCE:
-  force(screens)
 
-# Get lid state (open/closed)
-lid = lid_state()
+  config = ConfigParser.RawConfigParser()
+  config.read(os.path.join(os.environ['HOME'], 'etc/autodetect.ini'))
 
-# Set screen resolution
-xrandr(screens, lid)
+  if config.has_option('main', 'delay'):
+   time.sleep(config.getint('main', 'delay'))
 
-# Refresh screen resolution after it was modified
-screens = get_screens()
+  #################
+  # CONFIGURATION #
+  #################
 
-# Set wallpaper
-if config.getboolean('main', 'wallpaper'):
-  wallpaper()
+  global VERBOSE
+  global PRETEND
+  global RESET
+  global FORCE
 
-# Start system tray
-if config.getboolean('main', 'systray'):
-  systray(screens)
+  VERBOSE = options.verbose
+  PRETEND = options.pretend
+  RESET   = options.reset
+  FORCE   = options.force
 
-# Identify mouse
-trackball = is_trackball()
+  # Reset screens before doing anything
+  if RESET:
+    reset()
 
-# Configure mouse
-mouse(trackball)
+  # Get current configuration
+  screens = get_screens()
 
-screensaver()
+  if FORCE:
+    force(screens)
 
-## Setup keyboard
-cl('xmodmap $HOME/.xmodmap')
+  # Get lid state (open/closed)
+  lid = lid_state()
+
+  # Set screen resolution
+  xrandr(screens, lid)
+
+  # Refresh screen resolution after it was modified
+  screens = get_screens()
+
+  # Set wallpaper
+  if config.getboolean('main', 'wallpaper'):
+    wallpaper(BG_IMAGE)
+
+  # Start system tray
+  if config.getboolean('main', 'systray'):
+    systray(screens)
+
+  # Identify mouse
+  trackball = is_trackball()
+
+  # Configure mouse
+  mouse(trackball)
+
+  #screensaver()
+
+  ## Setup keyboard
+  cl('xmodmap $HOME/.xmodmap')
+
+if __name__ == '__main__':
+  main()
